@@ -1,0 +1,14 @@
+# path: mindcare-backend/data/surveys.csv
+employee_id,month,free_text,rating
+E_1001,2025-05,"Workload is high but manageable",4
+E_1042,2025-05,"Lack of recognition lately",2
+E_1111,2025-05,"Manager rarely meets with me",2
+E_1205,2025-05,"Great team collaboration",5
+E_1308,2025-05,"Challenging projects but good learning",4
+E_1402,2025-05,"Not enough growth opportunities",3
+E_1503,2025-05,"Good work-life balance",4
+E_1607,2025-05,"Too many meetings, not enough coding time",3
+E_1704,2025-05,"Supportive manager",4
+E_1001,2025-04,"Feeling burned out",2
+E_1042,2025-04,"Interesting projects",4
+E_1111,2025-04,"Lack of direction from manager",2

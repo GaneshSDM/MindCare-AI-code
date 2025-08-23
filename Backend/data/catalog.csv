@@ -1,0 +1,12 @@
+# path: mindcare-backend/data/ld_catalog.csv
+course_id,title,skill,provider
+C101,Snowflake Performance Deep Dive,Snowflake,Internal
+C201,Advanced dbt: Testing & CI,dbt,Internal
+C301,Effective 1:1s,Management,External
+C401,Python Advanced Programming,Python,Internal
+C501,SQL for Data Analysis,SQL,Internal
+C601,Machine Learning Fundamentals,Machine Learning,External
+C701,Data Visualization with Tableau,Tableau,Internal
+C801,Leadership Training,Leadership,External
+C901,Cloud Computing Fundamentals,Cloud,External
+C1001,ETL Best Practices,ETL,Internal

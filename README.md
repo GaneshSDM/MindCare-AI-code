@@ -322,14 +322,14 @@ We welcome contributions!
 * ✅ Streamlit dashboard
 * ✅ Local deployment
 
-### Phase 2 (Q4 2024)
+### Phase 2
 
 * 🔄 Advanced ML models (XGBoost, Neural Networks)
 * 🔄 What-if scenario simulation
 * 🔄 HRIS integrations
 * 🔄 Mobile-responsive UI
 
-### Phase 3 (Q1 2025)
+### Phase 3
 
 * 📋 Fine-tuned domain-specific LLMs
 * 📋 Real-time alerting
@@ -368,4 +368,3 @@ We welcome contributions!
 <p align="center">
 Made with ❤️ by the MindCare AI Team
 </p>
-```

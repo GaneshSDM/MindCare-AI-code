@@ -1,0 +1,535 @@
+-- Example: upload via SnowSQL/Connector
+-- PUT file://employees.csv @MINDCARE_DEMO.HR.MINDCARE_STAGE AUTO_COMPRESS=TRUE;
+
+COPY INTO MINDCARE_DEMO.HR.EMPLOYEES
+FROM @MINDCARE_DEMO.HR.MINDCARE_STAGE
+FILE_FORMAT = (FORMAT_NAME = MINDCARE_DEMO.HR.CSV_FMT)
+PATTERN = '.*employees.*(csv|csv.gz)$';
+
+-- Repeat similarly for the other tables…
+
+two files 
+py code for attrition_risk_by_team.csv
+
+import os, math, json
+from datetime import date, timedelta
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+import requests
+
+load_dotenv()
+
+TODAY = date(2025, 8, 22)
+DATA_DIR = "."
+CSV_EMP = os.path.join(DATA_DIR, "employees.csv")
+CSV_SUR = os.path.join(DATA_DIR, "surveys.csv")
+CSV_TS  = os.path.join(DATA_DIR, "timesheets.csv")
+CSV_SK  = os.path.join(DATA_DIR, "skills.csv")
+CSV_ATTR = os.path.join(DATA_DIR, "attrition_risk_by_team.csv")
+
+PERSON_ID = os.getenv("PERSON_ID", "E_1042")
+NEXT_STEPS_TABLE = os.getenv("SNOWFLAKE_NEXT_STEPS_TABLE", "NEXT_STEPS")
+
+# ----------------- Snowflake (optional) -----------------
+SF_ENABLED = all([os.getenv(k) for k in [
+    "SNOWFLAKE_ACCOUNT","SNOWFLAKE_USER","SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_WAREHOUSE","SNOWFLAKE_DATABASE","SNOWFLAKE_SCHEMA"
+]])
+
+def sf_conn():
+    import snowflake.connector as snow
+    return snow.connect(
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA"),
+        role=os.getenv("SNOWFLAKE_ROLE"),
+    )
+
+def sf_upsert_next_steps(record: dict, table_name: str = NEXT_STEPS_TABLE) -> pd.DataFrame:
+    """
+    MERGE (upsert) the next-steps JSON into Snowflake and return the saved row.
+    """
+    ctx = sf_conn(); cur = ctx.cursor()
+    try:
+        # ensure table exists
+        cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+          employee_id STRING,
+          attrition_risk FLOAT,
+          top_drivers STRING,
+          recommendations_json STRING,
+          owner STRING,
+          suggested_check_in_weeks NUMBER,
+          practice STRING,
+          tenure_weeks NUMBER,
+          avg_hours_last_12w FLOAT,
+          pto_rate_last_12w FLOAT,
+          avg_rating_last_3m FLOAT,
+          workload_ratio FLOAT,
+          created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+        );
+        """)
+
+        vals = (
+            record["employee_id"],
+            float(record["attrition_risk"]),
+            ",".join(record.get("top_drivers", [])),
+            json.dumps(record.get("recommendations", record.get("model_response", ""))),
+            record.get("owner", "manager"),
+            int(record.get("suggested_check_in_weeks", 6)),
+            record.get("practice"),
+            float(record.get("tenure_weeks", 0)),
+            float(record.get("avg_hours_last_12w", 0)),
+            float(record.get("pto_rate_last_12w", 0)),
+            float(record.get("avg_rating_last_3m", 0)),
+            float(record.get("workload_ratio", 0)),
+        )
+
+        cur.execute(f"""
+        MERGE INTO {table_name} t
+        USING (SELECT
+            %s AS employee_id,
+            %s AS attrition_risk,
+            %s AS top_drivers,
+            %s AS recommendations_json,
+            %s AS owner,
+            %s AS suggested_check_in_weeks,
+            %s AS practice,
+            %s AS tenure_weeks,
+            %s AS avg_hours_last_12w,
+            %s AS pto_rate_last_12w,
+            %s AS avg_rating_last_3m,
+            %s AS workload_ratio
+        ) s
+        ON t.employee_id = s.employee_id
+        WHEN MATCHED THEN UPDATE SET
+            attrition_risk = s.attrition_risk,
+            top_drivers = s.top_drivers,
+            recommendations_json = s.recommendations_json,
+            owner = s.owner,
+            suggested_check_in_weeks = s.suggested_check_in_weeks,
+            practice = s.practice,
+            tenure_weeks = s.tenure_weeks,
+            avg_hours_last_12w = s.avg_hours_last_12w,
+            pto_rate_last_12w = s.pto_rate_last_12w,
+            avg_rating_last_3m = s.avg_rating_last_3m,
+            workload_ratio = s.workload_ratio,
+            created_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT (
+            employee_id, attrition_risk, top_drivers, recommendations_json, owner,
+            suggested_check_in_weeks, practice, tenure_weeks, avg_hours_last_12w,
+            pto_rate_last_12w, avg_rating_last_3m, workload_ratio
+        ) VALUES (
+            s.employee_id, s.attrition_risk, s.top_drivers, s.recommendations_json, s.owner,
+            s.suggested_check_in_weeks, s.practice, s.tenure_weeks, s.avg_hours_last_12w,
+            s.pto_rate_last_12w, s.avg_rating_last_3m, s.workload_ratio
+        );
+        """, vals)
+
+        cur.execute(f"""
+        SELECT employee_id, attrition_risk, top_drivers, owner, suggested_check_in_weeks,
+               practice, tenure_weeks, avg_hours_last_12w, pto_rate_last_12w,
+               avg_rating_last_3m, workload_ratio, created_at
+        FROM {table_name}
+        WHERE employee_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """, (record["employee_id"],))
+        row = cur.fetchone()
+        cols = [c[0] for c in cur.description]
+        return pd.DataFrame([row], columns=cols)
+    finally:
+        cur.close(); ctx.close()
+
+# ----------------- Ollama (optional) -----------------
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+
+def ollama_generate(prompt: str):
+    try:
+        r = requests.post(f"{OLLAMA_HOST}/api/generate",
+                          json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+                          timeout=30)
+        if r.ok:
+            return r.json().get("response")
+    except Exception:
+        pass
+    return None
+
+# ----------------- Windows -----------------
+def month_buckets(start: date, end: date):
+    months = []
+    cur = date(start.year, start.month, 1)
+    last = date(end.year, end.month, 1)
+    while cur <= last:
+        months.append(f"{cur.year:04d}-{cur.month:02d}")
+        ny, nm = (cur.year + (1 if cur.month == 12 else 0)), (1 if cur.month == 12 else cur.month + 1)
+        cur = date(ny, nm, 1)
+    return months
+
+def week_buckets(start: date, end: date):
+    weeks = set(); cur = start
+    while cur <= end:
+        iy, iw, _ = cur.isocalendar()
+        weeks.add(f"{iy:04d}-W{iw:02d}"); cur += timedelta(days=1)
+    return sorted(weeks)
+
+# ----------------- Team risk -----------------
+def compute_attrition_from_csvs(emp_csv, sur_csv, ts_csv):
+    emp = pd.read_csv(emp_csv)
+    sur = pd.read_csv(sur_csv)
+    ts  = pd.read_csv(ts_csv)
+
+    wk_ref = set(week_buckets(date(2024,1,1), TODAY - timedelta(days=1))[-12:])
+    mo_ref = set(month_buckets(date(2024,1,1), TODAY - timedelta(days=1))[-3:])
+
+    ts_recent = ts[ts["week"].isin(wk_ref)].copy()
+    sv_recent = sur[sur["month"].isin(mo_ref)].copy()
+
+    emp_workload = ts_recent.groupby("employee_id")["hours"].mean().rename("avg_hours_wk").reset_index()
+    emp_pto = ts_recent.assign(pto=(ts_recent["hours"]<=0.1).astype(int)).groupby("employee_id")["pto"].mean().rename("pto_rate").reset_index()
+    emp_sent = sv_recent.groupby("employee_id")["rating"].mean().rename("avg_rating").reset_index()
+
+    agg = emp.rename(columns={"id":"employee_id"})[["employee_id","practice","tenure_weeks"]]
+    agg = agg.merge(emp_workload, on="employee_id", how="left")
+    agg = agg.merge(emp_pto, on="employee_id", how="left")
+    agg = agg.merge(emp_sent, on="employee_id", how="left")
+
+    agg["avg_hours_wk"] = agg["avg_hours_wk"].fillna(38.0)
+    agg["pto_rate"] = agg["pto_rate"].fillna(0.02)
+    agg["avg_rating"] = agg["avg_rating"].fillna(3.5)
+
+    agg["workload_ratio"] = agg["avg_hours_wk"]/40.0
+    agg["sentiment_m1p1"] = (agg["avg_rating"]/5.0)*2 - 1
+    bump = lambda x,c,w: math.exp(-((x-c)**2)/(2*w**2))
+    agg["tenure_bump"] = 0.8*agg["tenure_weeks"].apply(lambda x: bump(x,26,10)) + 0.6*agg["tenure_weeks"].apply(lambda x: bump(x,104,15))
+
+    w_work,w_sent,w_pto,w_ten,bias = 1.1,1.2,0.8,0.5,0.3
+    lin = (w_work*(agg["workload_ratio"].clip(lower=1.0)-1.0)
+           + w_sent*(-agg["sentiment_m1p1"])
+           + w_pto*agg["pto_rate"]
+           + w_ten*agg["tenure_bump"]) - bias
+    agg["risk"] = 1/(1+np.exp(-lin))
+
+    def top3(r):
+        c = {
+            "workload_ratio": w_work*max(0.0, r["workload_ratio"]-1.0),
+            "low_sentiment": w_sent*max(0.0, -r["sentiment_m1p1"]),
+            "pto_spike": w_pto*r["pto_rate"],
+            "tenure_transition": w_ten*r["tenure_bump"],
+            "low_1on1": 0.6 if (r["avg_rating"]<=3.0 and r["workload_ratio"]>=1.05) else 0.0,
+            "low_recognition": 0.4 if (r["avg_rating"]<=3.2) else 0.0,
+            "low_growth": 0.5 if (r["avg_rating"]<=3.2 and r["tenure_weeks"]>80) else 0.0,
+        }
+        return [k for k,_ in sorted(c.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+
+    tops = agg.apply(top3, axis=1)
+    agg[["top_driver_1","top_driver_2","top_driver_3"]] = pd.DataFrame(tops.tolist(), index=agg.index)
+
+    team = agg.groupby("practice").agg(avg_risk=("risk","mean")).reset_index().rename(columns={"practice":"team"})
+    mode_or_first = lambda s: (s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
+    team["top_driver_1"] = agg.groupby("practice")["top_driver_1"].apply(mode_or_first).values
+    team["top_driver_2"] = agg.groupby("practice")["top_driver_2"].apply(mode_or_first).values
+    team["top_driver_3"] = agg.groupby("practice")["top_driver_3"].apply(mode_or_first).values
+    team["avg_risk"] = team["avg_risk"].round(2)
+
+    return team, agg
+
+# ----------------- Employee next-steps (Ollama or fallback) -----------------
+def build_person_prompt(emp_row: dict, skills: list) -> str:
+    return f"""
+You are an HR analyst AI. Using the employee profile below, propose 4-6 concrete, non-generic next steps to reduce attrition risk and support growth.
+Make them specific (cadence, duration, owner).
+
+Employee:
+- employee_id: {emp_row['employee_id']}
+- practice: {emp_row['practice']}
+- tenure_weeks: {emp_row['tenure_weeks']}
+- avg_hours_last_12w: {emp_row['avg_hours_wk']:.1f}
+- pto_rate_last_12w: {emp_row['pto_rate']:.3f}
+- avg_rating_last_3m: {emp_row['avg_rating']:.1f}
+- workload_ratio: {emp_row['workload_ratio']:.2f}
+- attrition_risk: {emp_row['risk']:.3f}
+- top_drivers: [{emp_row['top_driver_1']}, {emp_row['top_driver_2']}, {emp_row['top_driver_3']}]
+- skills: {skills}
+
+Return JSON with fields:
+{{
+  "employee_id": "...",
+  "attrition_risk": <0..1>,
+  "recommendations": ["...", "...", "..."],
+  "owner": "manager|hr|employee",
+  "suggested_check_in_weeks": 6
+}}
+""".strip()
+
+def employee_next_steps(person_id: str, agg: pd.DataFrame, skills_df: pd.DataFrame, out_dir: str="."):
+    row = agg[agg["employee_id"] == person_id]
+    if row.empty:
+        raise ValueError(f"{person_id} not found.")
+    r = row.iloc[0].to_dict()
+
+    sk = skills_df[skills_df["employee_id"] == person_id][["skill","level"]].sort_values("level", ascending=False)
+    skills_list = sk.to_dict(orient="records")
+
+    prompt = build_person_prompt(r, skills_list)
+    resp = ollama_generate(prompt)
+
+    if not resp:
+        weak = sk.sort_values("level").head(2)["skill"].tolist()
+        data = {
+            "employee_id": person_id,
+            "attrition_risk": round(float(r["risk"]),3),
+            "recommendations": [
+                "Set bi-weekly 1:1s for 6 weeks with a clear agenda (recognition, growth, load balancing).",
+                "Target workload ≤ 40 hrs/week for two sprints; rebalance tickets.",
+                f"Enroll in focused upskilling: {', '.join(weak)} (4 weeks).",
+                "Assign a 4-week cross-team project rotation.",
+                "Create a written growth plan with milestones; mid-point review in 3 weeks."
+            ],
+            "owner": "manager",
+            "suggested_check_in_weeks": 6
+        }
+    else:
+        try:
+            data = json.loads(resp)
+        except Exception:
+            data = {
+                "employee_id": person_id,
+                "attrition_risk": round(float(r["risk"]),3),
+                "model_response": resp
+            }
+
+    enriched = {
+        **data,
+        "practice": r.get("practice"),
+        "tenure_weeks": float(r.get("tenure_weeks", 0)),
+        "avg_hours_last_12w": float(r.get("avg_hours_wk", 0)),
+        "pto_rate_last_12w": float(r.get("pto_rate", 0)),
+        "avg_rating_last_3m": float(r.get("avg_rating", 0)),
+        "workload_ratio": float(r.get("workload_ratio", 0)),
+        "top_drivers": [r.get("top_driver_1"), r.get("top_driver_2"), r.get("top_driver_3")],
+    }
+
+    out_path = os.path.join(out_dir, f"next_steps_{person_id}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(enriched, f, indent=2)
+    return out_path, enriched
+
+def export_saved_row(saved_df: pd.DataFrame, person_id: str):
+    csv_path = f"next_steps_{person_id}.csv"
+    xls_path = f"next_steps_{person_id}.xlsx"
+    saved_df.to_csv(csv_path, index=False)
+    try:
+        saved_df.to_excel(xls_path, index=False)
+    except Exception:
+        # openpyxl missing or old; ignore silently
+        pass
+    print(f"Exported saved row to {csv_path} and {xls_path}")
+
+def main():
+    # Load CSVs
+    emp = pd.read_csv(CSV_EMP)
+    sur = pd.read_csv(CSV_SUR)
+    ts  = pd.read_csv(CSV_TS)
+    sk  = pd.read_csv(CSV_SK)
+
+    # Compute team + per-employee risk, and write team artifact
+    team, agg = compute_attrition_from_csvs(CSV_EMP, CSV_SUR, CSV_TS)
+    team.to_csv(CSV_ATTR, index=False)
+    print(f"Wrote {CSV_ATTR}\n")
+    print("Team risk snapshot:")
+    print(team.to_string(index=False), "\n")
+
+    # Build next steps for PERSON_ID (Ollama or fallback)
+    out_path, record = employee_next_steps(PERSON_ID, agg, sk, DATA_DIR)
+    print(f"Wrote {out_path}\n")
+
+    # Upsert into Snowflake and echo the saved row, then export CSV/XLSX
+    if SF_ENABLED and NEXT_STEPS_TABLE:
+        print(f"Upserting into Snowflake table {NEXT_STEPS_TABLE} ...")
+        saved = sf_upsert_next_steps({
+            "employee_id": record["employee_id"],
+            "attrition_risk": record["attrition_risk"],
+            "top_drivers": record["top_drivers"],
+            "recommendations": record.get("recommendations", record.get("model_response", "")),
+            "owner": record.get("owner", "manager"),
+            "suggested_check_in_weeks": record.get("suggested_check_in_weeks", 6),
+            "practice": record.get("practice"),
+            "tenure_weeks": record.get("tenure_weeks"),
+            "avg_hours_last_12w": record.get("avg_hours_last_12w"),
+            "pto_rate_last_12w": record.get("pto_rate_last_12w"),
+            "avg_rating_last_3m": record.get("avg_rating_last_3m"),
+            "workload_ratio": record.get("workload_ratio"),
+        }, NEXT_STEPS_TABLE)
+
+        print("\n=== Saved NEXT_STEPS row (from Snowflake) ===")
+        print(saved.to_string(index=False))
+
+        # Export the saved row for download/BI
+        export_saved_row(saved, PERSON_ID)
+    else:
+        print("Snowflake not configured — skipped DB upsert. Set env & SNOWFLAKE_NEXT_STEPS_TABLE to enable.")
+        # Create a one-row DataFrame from local record so you still get CSV/XLSX artifacts
+        saved_local = pd.DataFrame([{
+            "employee_id": record["employee_id"],
+            "attrition_risk": record["attrition_risk"],
+            "top_drivers": ",".join(record["top_drivers"]),
+            "owner": record.get("owner", "manager"),
+            "suggested_check_in_weeks": record.get("suggested_check_in_weeks", 6),
+            "practice": record.get("practice"),
+            "tenure_weeks": record.get("tenure_weeks"),
+            "avg_hours_last_12w": record.get("avg_hours_last_12w"),
+            "pto_rate_last_12w": record.get("pto_rate_last_12w"),
+            "avg_rating_last_3m": record.get("avg_rating_last_3m"),
+            "workload_ratio": record.get("workload_ratio"),
+            "created_at": pd.Timestamp.now()
+        }])
+        export_saved_row(saved_local, PERSON_ID)
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+app.py
+
+import os, json
+import pandas as pd
+from flask import Flask, request, jsonify, render_template_string
+from dotenv import load_dotenv
+
+load_dotenv()
+APP = Flask(__name__)
+
+CSV_EMP = "employees.csv"
+JSON_FALLBACK_DIR = "."
+NEXT_STEPS_TABLE = os.getenv("SNOWFLAKE_NEXT_STEPS_TABLE", "NEXT_STEPS")
+
+SF_ENABLED = all([os.getenv(k) for k in [
+    "SNOWFLAKE_ACCOUNT","SNOWFLAKE_USER","SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_WAREHOUSE","SNOWFLAKE_DATABASE","SNOWFLAKE_SCHEMA"
+]])
+
+def sf_conn():
+    import snowflake.connector as snow
+    return snow.connect(
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA"),
+        role=os.getenv("SNOWFLAKE_ROLE"),
+    )
+
+HTML = """
+<!doctype html>
+<title>Next Steps Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/milligram/dist/milligram.min.css">
+<div class="container">
+  <h2>Next Steps Viewer</h2>
+  <form method="GET" action="/employee">
+    <label for="employee_id">Employee:</label>
+    <select name="employee_id">
+      {% for eid in eids %}
+      <option value="{{eid}}" {% if eid == selected %}selected{% endif %}>{{eid}}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">View</button>
+  </form>
+
+  {% if row %}
+  <h4>Latest Saved Record</h4>
+  <table>
+    <thead><tr>
+      {% for c in row.columns %}<th>{{c}}</th>{% endfor %}
+    </tr></thead>
+    <tbody>
+      <tr>{% for c in row.columns %}<td>{{row.iloc[0][c]}}</td>{% endfor %}</tr>
+    </tbody>
+  </table>
+  <p><a href="/api/next_steps/{{selected}}">API: JSON</a></p>
+  {% elif json_local %}
+  <h4>Local JSON (fallback)</h4>
+  <pre>{{ json_local }}</pre>
+  {% endif %}
+</div>
+"""
+
+@APP.route("/")
+def index():
+    eids = pd.read_csv(CSV_EMP)["id"].tolist()
+    return render_template_string(HTML, eids=eids, selected=eids[0], row=None, json_local=None)
+
+@APP.route("/employee")
+def employee():
+    eid = request.args.get("employee_id")
+    eids = pd.read_csv(CSV_EMP)["id"].tolist()
+    row, json_local = None, None
+    if SF_ENABLED:
+        try:
+            ctx = sf_conn(); cur = ctx.cursor()
+            cur.execute(f"""
+                SELECT employee_id, attrition_risk, top_drivers, owner, suggested_check_in_weeks,
+                       practice, tenure_weeks, avg_hours_last_12w, pto_rate_last_12w,
+                       avg_rating_last_3m, workload_ratio, created_at
+                FROM {NEXT_STEPS_TABLE}
+                WHERE employee_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (eid,))
+            data = cur.fetchall()
+            cols = [c[0] for c in cur.description]
+            if data:
+                row = pd.DataFrame([data[0]], columns=cols)
+        finally:
+            try: cur.close(); ctx.close()
+            except: pass
+
+    if row is None:
+        # fallback to local json
+        path = os.path.join(JSON_FALLBACK_DIR, f"next_steps_{eid}.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                json_local = f.read()
+    return render_template_string(HTML, eids=eids, selected=eid, row=row, json_local=json_local)
+
+@APP.route("/api/next_steps/<employee_id>")
+def api_next_steps(employee_id):
+    if SF_ENABLED:
+        try:
+            ctx = sf_conn(); cur = ctx.cursor()
+            cur.execute(f"""
+                SELECT employee_id, attrition_risk, top_drivers, owner, suggested_check_in_weeks,
+                       practice, tenure_weeks, avg_hours_last_12w, pto_rate_last_12w,
+                       avg_rating_last_3m, workload_ratio, created_at
+                FROM {NEXT_STEPS_TABLE}
+                WHERE employee_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (employee_id,))
+            data = cur.fetchall()
+            cols = [c[0] for c in cur.description]
+            if data:
+                return jsonify(dict(zip(cols, data[0])))
+        finally:
+            try: cur.close(); ctx.close()
+            except: pass
+    # fallback to local file
+    path = os.path.join(JSON_FALLBACK_DIR, f"next_steps_{employee_id}.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return jsonify(json.loads(f.read()))
+    return jsonify({"error": "No data found"}), 404
+
+if __name__ == "__main__":
+    APP.run(host="0.0.0.0", port=int(os.environ.get("PORT", 7860)))
+
+

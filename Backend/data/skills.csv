@@ -1,0 +1,21 @@
+# path: mindcare-backend/data/skills.csv
+employee_id,skill,level
+E_1001,Snowflake,2
+E_1001,dbt,2
+E_1042,Snowflake,1
+E_1042,Airflow,3
+E_1111,SQL,2
+E_1205,Python,3
+E_1205,SQL,3
+E_1308,Python,2
+E_1308,TensorFlow,2
+E_1402,SQL,3
+E_1402,Tableau,2
+E_1503,Python,3
+E_1503,SQL,4
+E_1503,Airflow,3
+E_1607,Python,4
+E_1607,TensorFlow,3
+E_1607,PyTorch,2
+E_1704,SQL,3
+E_1704,Excel,3

@@ -1,0 +1,12 @@
+# path: mindcare-backend/data/employees.csv
+employee_id,role,practice,tenure_weeks,manager_id,seniority,left_company
+E_1001,Data Engineer,Cloud,104,M_42,Mid,0
+E_1002,ML Engineer,AI,60,M_11,Junior,0
+E_1042,Data Engineer,Data,180,M_09,Mid,0
+E_1111,Analyst,Data,38,M_22,Junior,1
+E_1205,Data Engineer,Cloud,78,M_42,Mid,0
+E_1308,ML Engineer,AI,45,M_11,Junior,0
+E_1402,Analyst,Data,92,M_22,Junior,0
+E_1503,Data Engineer,Data,156,M_09,Senior,0
+E_1607,ML Engineer,AI,120,M_11,Senior,0
+E_1704,Analyst,Data,65,M_22,Junior,0

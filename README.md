@@ -5,7 +5,7 @@
 [![Streamlit 1.28+](https://img.shields.io/badge/Streamlit-1.28%2B-ff4b4b.svg)](https://streamlit.io)
 [![Ollama Local LLM](https://img.shields.io/badge/Ollama-Local%20LLM-2ea44f.svg)](https://ollama.ai)
 
-> **Predict attrition, personalize growth, and answer HR queries — locally with Ollama.**
+> **Predict attrition, personalize growth, and answer HR queries — with generative AI utilizing Gemini 2.5 Pro and alternatively locally with Ollama**
 
 MindCare AI is an **offline-first** HR analytics platform that combines predictive modeling with **local** Large Language Models to help organizations retain talent, identify growth opportunities, and streamline HR operations **without compromising data privacy**.
 

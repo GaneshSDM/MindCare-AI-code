@@ -9,6 +9,7 @@
 
 MindCare AI is an **offline-first** HR analytics platform that combines predictive modeling with **local** Large Language Models to help organizations retain talent, identify growth opportunities, and streamline HR operations **without compromising data privacy**.
 
+https://huggingface.co/spaces/ganesund/Mindcare_AI
 ---
 
 ## 🎯 Key Features
@@ -69,6 +70,7 @@ MindCare AI is an **offline-first** HR analytics platform that combines predicti
 
 ### Prerequisites
 - Python 3.10+
+- Google AI Studio's Gemini 2.5 Pro
 - [Ollama](https://ollama.ai) installed locally
 - 8GB+ RAM (recommended), 10GB+ free disk space
 
